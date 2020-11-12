@@ -72,7 +72,8 @@ def train(order, model, memory):
     # Store our loss and accuracy for plotting
     train_loss_set = []
     # trange is a tqdm wrapper around the normal python range
-    for epoch in trange(args.epochs, desc="Epoch"):
+    # for epoch in trange(args.epochs, desc="Epoch"):
+    for epoch in range(args.epochs):
          # Training begins
         print("Training begins")
         # Set our model to training mode (as opposed to evaluation mode)
@@ -81,7 +82,8 @@ def train(order, model, memory):
         tr_loss = 0
         nb_tr_examples, nb_tr_steps, num_curr_exs = 0, 0, 0
         # Train the data for one epoch
-        for step, batch in enumerate(tqdm(train_dataloader)):
+        # for step, batch in enumerate(tqdm(train_dataloader)):
+        for step, batch in enumerate(train_dataloader):
             # Release file descriptors which function as shared
             # memory handles otherwise it will hit the limit when
             # there are too many batches at dataloader
@@ -90,7 +92,7 @@ def train(order, model, memory):
             # Perform sparse experience replay after every REPLAY_FREQ steps
             if (step+1) % REPLAY_FREQ == 0:
                 # sample 64 examples from memory
-                content, attn_masks, labels = memory.sample(sample_size=64)
+                content, attn_masks, labels = memory.sample(sample_size=32)
                 if use_cuda:
                     content = content.cuda()
                     attn_masks = attn_masks.cuda()
@@ -163,18 +165,17 @@ def save_checkpoint(model_dict, order, epoch, memory=None):
     """
     Function to save a model checkpoint to the specified location
     """
-    base_loc = './model_checkpoints'
+    base_loc = 'model_checkpoints'
     if not os.path.exists(base_loc):
         os.mkdir('model_checkpoints')
 
-    checkpoints_dir = base_loc + '/' + MODEL_NAME
+    checkpoints_dir =os.path.join(base_loc,MODEL_NAME)
     if not os.path.exists(checkpoints_dir):
         os.mkdir(checkpoints_dir)
-    checkpoints_file = 'classifier_order_' + \
-        str(order) + '_epoch_'+str(epoch)+'.pth'
+    checkpoints_file = os.path.join('classifier_order_'+str(order)+'_epoch_'+str(epoch)+'.pth')
     torch.save(model_dict, os.path.join(checkpoints_dir, checkpoints_file))
     if memory is not None:
-        with open(checkpoints_dir+'/order_'+str(order)+'_epoch_'+str(epoch)+'.pkl', 'wb') as f:
+        with open(os.path.join(checkpoints_dir,'order_'+str(order)+'_epoch_'+str(epoch)+'.pkl'), 'wb') as f:
             pickle.dump(memory, f)
 
 
@@ -252,12 +253,11 @@ def save_trainloss(train_loss_set, order):
     if not os.path.exists(base_loc):
         os.mkdir(base_loc)
 
-    image_dir = base_loc + '/' + MODEL_NAME
+    image_dir = os.path.join(base_loc,MODEL_NAME)
     if not os.path.exists(image_dir):
         os.mkdir(image_dir)
 
-    plt.savefig(train_loss_set, image_dir+'/order_' +
-                str(order)+'_train_loss.png')
+    plt.savefig(os.path.join(image_dir, 'order_'+str(order)+'_train_loss.png'))
 
 
 if __name__ == '__main__':
