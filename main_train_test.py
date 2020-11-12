@@ -108,7 +108,7 @@ class MbPA_Experiment():
                 # Perform sparse experience replay after every REPLAY_FREQ steps
                 if (step+1) % REPLAY_FREQ == 0:
                     # sample 64 examples from memory
-                    content, attn_masks, labels = self.memory.sample(sample_size=self.bath_size)
+                    content, attn_masks, labels = self.memory.sample(sample_size=self.batch_size)
                     if self.use_cuda:
                         content = content.cuda()
                         attn_masks = attn_masks.cuda()
