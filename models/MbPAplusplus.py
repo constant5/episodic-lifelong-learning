@@ -5,6 +5,7 @@ import numpy as np
 from tqdm import trange
 import copy
 from models.baselines.MbPA import MbPA
+from tqdm import tnrange, tqdm_notebook
 import random
 # import pdb
 
@@ -91,8 +92,8 @@ class MbPAplusplus(nn.Module):
     Implements Memory based Parameter Adaptation model
     """
 
-    def __init__(self, L=30, model_state=None, num_labels=33):
-        super(MbPAplusplus, self).__init__()
+    def __init__(self, L=2, model_state=None):
+        # super(MbPAplusplus, self).__init__()
 
         if model_state is None:
             # Key network to find key representation of content
@@ -100,12 +101,12 @@ class MbPAplusplus(nn.Module):
                 'bert-base-uncased')
             # Bert model for text classification
             self.classifier = transformers.BertForSequenceClassification.from_pretrained(
-                'bert-base-uncased', num_labels=num_labels)
+                'bert-base-uncased', num_labels=33)
 
         else:
 
             cls_config = transformers.BertConfig.from_pretrained(
-                'bert-base-uncased', num_labels=num_labels)
+                'bert-base-uncased', num_labels=33)
             self.classifier = transformers.BertForSequenceClassification(
                 cls_config)
             self.classifier.load_state_dict(model_state['classifier'])
@@ -113,10 +114,15 @@ class MbPAplusplus(nn.Module):
                 'bert-base-uncased')
             self.key_encoder = transformers.BertModel(key_config)
             self.key_encoder.load_state_dict(model_state['key_encoder'])
+            print(type(self.classifier))
             # load base model weights
+            # TODO: Fic these to return base_weights
             # we need to detach since parameters() method returns reference to the original parameters
-            self.base_weights = self.classifier.parameters(
-            ).clone().detach().to("cuda" if torch.cuda.is_available() else "cpu")
+            # self.base_weights = self.classifier.parameters().clone().detach().to("cuda" if torch.cuda.is_available() else "cpu")
+            self.base_weights = []
+            for param in  self.classifier.parameters():
+              self.base_weights.append(param.clone().detach().to("cuda" if torch.cuda.is_available() else "cpu"))
+        
         # local adaptation learning rate - 1e-3 or 5e-3
         self.loc_adapt_lr = 1e-3
         # Number of local adaptation steps

@@ -3,8 +3,8 @@ import torch.utils.data as data
 from data_loader import DataSet
 from models.MbPAplusplus import ReplayMemory, MbPAplusplus
 import transformers
-from tqdm import trange, tqdm
-from tqdm import tnrange, tqdm_notebook
+# from tqdm import trange, tqdm
+from tqdm.notebook import trange, tqdm
 import time
 import copy
 import matplotlib.pyplot as plt
@@ -88,7 +88,8 @@ class MbPA_Experiment():
         # Store our loss and accuracy for plotting
         train_loss_set = []
         # trange is a tqdm wrapper around the normal python range
-        for epoch in tnrange(self.epochs, desc="Epoch"):
+        # for epoch in tnrange(self.epochs, desc="Epoch"):
+        for epoch in trange(self.epochs, desc='Epochs'):
         # for epoch in range(self.epochs):
             # Training begins
             print("Training begins")
@@ -98,7 +99,7 @@ class MbPA_Experiment():
             tr_loss = 0
             nb_tr_examples, nb_tr_steps, num_curr_exs = 0, 0, 0
             # Train the data for one epoch
-            for step, batch in enumerate(tqdm_notebook(train_dataloader)):
+            for step, batch in enumerate(tqdm(train_dataloader, desc='Batch')):
             # for step, batch in enumerate(train_dataloader):
                 # Release file descriptors which function as shared
                 # memory handles otherwise it will hit the limit when
@@ -136,7 +137,7 @@ class MbPA_Experiment():
                 if (step+1) % self.save_interval == 0:
                     print('Saving checkpoint at step ' , str(step+1))
                     model_dict = self.model.save_state()
-                    save_checkpoint(model_dict, order, epoch+1, iteration=str(step+1), memory=memory.memory)
+                    self.save_checkpoint(model_dict, epoch+1, iteration=str(step+1))
 
                 # Unpacking the batch items
                 content, attn_masks, labels = batch_cp
@@ -178,12 +179,12 @@ class MbPA_Experiment():
             print("Train loss: {}".format(tr_loss/nb_tr_steps))
             print("Time taken till now: {} hours".format((now-start)/3600))
             model_dict = self.model.save_state()
-            self.save_checkpoint(model_dict, self.order, epoch+1, memory=self.memory.memory)
+            self.save_checkpoint(model_dict, epoch+1, memory=True)
 
         self.save_trainloss(train_loss_set)
 
 
-    def save_checkpoint(self, model_dict, order, epoch, iteration='', memory=None):
+    def save_checkpoint(self, model_dict, epoch, iteration='', memory=None):
         """
         Function to save a model checkpoint to the specified location
         """
@@ -195,12 +196,12 @@ class MbPA_Experiment():
         if not os.path.exists(checkpoints_dir):
             os.mkdir(checkpoints_dir)
         checkpoints_file = 'classifier_order_' + \
-            str(order) + '_epoch_'+str(epoch)+'_'+iteration+'.pth'
+            str(self.order) + '_epoch_'+str(epoch)+'_'+iteration+'.pth'
         torch.save(model_dict, os.path.join(checkpoints_dir, checkpoints_file))
-        memory_file = 'order_'+str(order)+'_epoch_'+str(epoch)+'_'+iteration+'.pkl'
-        if memory is not None:
+        memory_file = 'order_'+str(self.order)+'_epoch_'+str(epoch)+'_'+iteration+'.pkl'
+        if memory:
             with open(os.path.join(checkpoints_dir,memory_file), 'wb') as f:
-                pickle.dump(memory, f)
+                pickle.dump(self.memory.memory, f)
 
 
     def calc_correct(self, preds, labels):
@@ -229,7 +230,7 @@ class MbPA_Experiment():
         total_correct, tmp_correct, t_steps = 0, 0, 0
 
         print("Validation step started...")
-        for batch in tqdm(test_dataloader):
+        for batch in tqdm(test_dataloader, desc='Batch'):
             batch_cp = copy.deepcopy(batch)
             del batch
             contents, attn_masks, labels = batch_cp
@@ -242,7 +243,7 @@ class MbPA_Experiment():
             ans_logits = []
             # Iterate over the test batch to calculate label for each document(i.e,content)
             # and store them in a list for comparision later
-            for content, attn_mask, (rt_contents, rt_attn_masks, rt_labels) in tqdm(zip(contents, attn_masks, retrieved_batches), total=len(contents)):
+            for content, attn_mask, (rt_contents, rt_attn_masks, rt_labels) in tqdm(zip(contents, attn_masks, retrieved_batches), total=len(contents), desc='Refit' , leave=False):
                 if self.use_cuda:
                     rt_contents = rt_contents.cuda()
                     rt_attn_masks = rt_attn_masks.cuda()
