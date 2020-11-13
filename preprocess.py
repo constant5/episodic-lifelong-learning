@@ -232,7 +232,7 @@ if __name__ == "__main__":
     total_time = 0
     total_order = 4
     print("Started generating training data")
-    for i in range(0,4):
+    for i in range(0,total_order):
         print("Started for order {}".format(i+1))
         start = time.time()
         create_ordered_tc_data(i+1, split='train')
@@ -240,10 +240,4 @@ if __name__ == "__main__":
         print("Time taken for order {} : {} minutes".format(i+1, (end-start)/60))
         total_time += (end-start)/60
     print("Total time taken: {} for generating training and test data".format(total_time))
-    # # create test data
-    # print("Started generating testing data")
-    # start = time.time()
-    # create_ordered_tc_data(i+1, split='test')
-    # end = time.time()
-    # print("Total time taken: {} for generating testing data".format((end-start)/60))
     print("Completed preprocessing :)")
