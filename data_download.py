@@ -55,7 +55,8 @@ def save_response_content(response, destination):
 for name,url in files_links.items():
     output = os.path.join(root_dir, name+'.tar.gz')
     file_id = url.split('/')[5]
-    download_file_from_google_drive(file_id, output)
+    if not os.path.exists(output):
+        download_file_from_google_drive(file_id, output)
 
 
 # extract to train and test
