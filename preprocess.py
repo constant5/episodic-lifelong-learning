@@ -5,20 +5,22 @@ import pickle
 import swifter
 import time
 import os
+from sklearn.model_selection import train_test_split
 
 TC_NUM_CLASSES = {
     'yelp': 5,
     'yahoo': 10,
     'amazon': 5,
     'agnews': 4,
-    'dbpedia': 14
+    'dbpedia': 14,
+    'reddit' : 10
 }
 # dataset order for text classification
 TC_ORDER = {
-    1: ['yelp', 'agnews', 'dbpedia', 'amazon', 'yahoo'],
-    2: ['dbpedia', 'yahoo', 'agnews', 'amazon', 'yelp'],
-    3: ['yelp', 'yahoo', 'amazon', 'dbpedia', 'agnews'],
-    4: ['agnews', 'yelp', 'amazon', 'yahoo', 'dbpedia']
+    1: ['yelp', 'agnews', 'dbpedia', 'amazon', 'yahoo', 'reddit'],
+    2: ['dbpedia', 'yahoo', 'reddit','agnews', 'amazon', 'yelp'],
+    3: ['yelp', 'reddit', 'yahoo', 'amazon', 'dbpedia', 'agnews'],
+    4: ['reddit','agnews', 'yelp', 'amazon', 'yahoo', 'dbpedia']
 }
 # dataset order for question answering
 # QA Not implemented
@@ -39,7 +41,9 @@ INDIVIDUAL_CLASS_LABELS = {
               7: 'Business & Finance', 8: 'Entertainment & Music',
               9: 'Family & Relationships', 10: 'Politics & Government'},
     'amazon': {1: '1', 2: '2', 3: '3', 4: '4', 5: '5'},
-    'agnews': {1: 'World', 2: 'Sports', 3: 'Business', 4: 'Sci/Tech'}
+    'agnews': {1: 'World', 2: 'Sports', 3: 'Business', 4: 'Sci/Tech'}, 
+    'reddit': {1: 'AskReddit', 2: 'pics', 3: 'gaming', 4: 'reddit.com', 5: 'funny',
+               6: 'IAmA', 7: 'fffffffuuuuuuuuuuuu', 8: 'politics', 9: 'atheism', 10: 'trees'}
 }
 
 
@@ -70,13 +74,22 @@ def preprocess(text):
     return str(text)
 
 
-def create_ordered_tc_data(order, base_location='data/original_data', save_location=os.path.join
+def create_ordered_tc_data(order, base_location=os.path.join('data','original_data'), save_location=os.path.join
 ('data','ordered_data'), split='train'):
-    """
-    creates ordered dataset for text classification with a maximum of 115,000 sequences
+    """creates ordered dataset for text classification with a maximum of 115,000 sequences
     and 7,600 sequences from each individual dataset for train and test data respectively
     i.e.,the size of the smallest training and test sets
+
+    Args:
+        order (int): which order of data to generate from TC_ORDER      
+        base_location (str, optional): location of data to order. 
+            Defaults to os.path.join('data','original_data')
+        save_location (str, optional): location to save ordered data. 
+            Defaults to os.path.join('data','ordered_data').
+        TODO: This parmeter is not used 
+        split (str, optional): generate test or train set. Defaults to 'train'.
     """
+
 
     if not os.path.exists(save_location):
         os.mkdir(save_location)
@@ -84,8 +97,10 @@ def create_ordered_tc_data(order, base_location='data/original_data', save_locat
         os.mkdir(os.path.join(save_location, 'train'))
     dataset_sequence = TC_ORDER[order]
     ordered_dataset = {'labels': [], 'content': []}
+    test_set = {'labels': [], 'content': []}
     num_classes = -1
-    max_samples = 115000 if split == 'train' else 7600
+    train_samples = 11500
+    test_samples = 7600
     label_to_class = dict()
     amazon_done = False
     amazon_labels = dict()
@@ -113,11 +128,6 @@ def create_ordered_tc_data(order, base_location='data/original_data', save_locat
                     label_to_class[new_key] = v
                     yelp_labels[k] = new_key
                 num_classes += TC_NUM_CLASSES[data]
-            # filter rows with length greater than 20 (2 words including spaces on average)
-            df.drop(df[df['content'].map(len) < 20].index, inplace=True)
-            ordered_dataset['labels'].extend(list(df.labels[:max_samples]))
-            ordered_dataset['content'].extend(
-                list(df.content[:max_samples]))
 
         elif data == 'amazon':
             amazon_done = True
@@ -138,11 +148,7 @@ def create_ordered_tc_data(order, base_location='data/original_data', save_locat
                     label_to_class[new_key] = v
                     amazon_labels[k] = new_key
                 num_classes += TC_NUM_CLASSES[data]
-            # filter rows with length greater than 20 (2 words including spaces on average)
-            df.drop(df[df['content'].map(len) < 20].index, inplace=True)
-            ordered_dataset['labels'].extend(list(df.labels[:max_samples]))
-            ordered_dataset['content'].extend(
-                list(df.content[:max_samples]))
+
 
         elif data == 'yahoo':
             df = pd.read_csv(os.path.join(base_location, split, data +'.csv'),
@@ -151,16 +157,28 @@ def create_ordered_tc_data(order, base_location='data/original_data', save_locat
             print(df['labels'].head())
             df.loc[:, 'labels'] = df.labels + num_classes
             df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            # filter rows with length greater than 20 (2 words including spaces on average)
-            df.drop(df[df['content'].map(len) < 20].index, inplace=True)
-            ordered_dataset['labels'].extend(list(df.labels[:max_samples]))
-            ordered_dataset['content'].extend(list(df.content[: max_samples]))
             # Mapping new labels to classes
             for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
                 new_key = k + num_classes
                 label_to_class[new_key] = v
             num_classes += TC_NUM_CLASSES[data]
 
+
+
+        elif data=='reddit':
+            # dataset is agnews or dbpedia
+            df = pd.read_csv(base_location+'/'+split+'/'+data+'.csv',
+                             header=None, names=['labels','content'])
+            df.dropna(subset=['content'], inplace=True)
+            df.loc[:, 'labels'] = df.labels + num_classes
+            df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
+            # Mapping new labels to classes
+            for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
+                new_key = k + num_classes
+                label_to_class[new_key] = v
+            num_classes += TC_NUM_CLASSES[data]
+
+        
         else:
             # dataset is agnews or dbpedia
             df = pd.read_csv(base_location+'/'+split+'/'+data+'.csv',
@@ -168,27 +186,41 @@ def create_ordered_tc_data(order, base_location='data/original_data', save_locat
             df.dropna(subset=['content'], inplace=True)
             df.loc[:, 'labels'] = df.labels + num_classes
             df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            # filter rows with length greater than 20 (2 words including spaces on average)
-            df.drop(df[df['content'].map(len) < 20].index, inplace=True)
-            ordered_dataset['labels'].extend(list(df.labels[:max_samples]))
-            ordered_dataset['content'].extend(list(df.content[:max_samples]))
             # Mapping new labels to classes
             for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
                 new_key = k + num_classes
                 label_to_class[new_key] = v
             num_classes += TC_NUM_CLASSES[data]
 
+
+
+        # filter rows with length greater than 20 (2 words including spaces on average)
+        df.drop(df[df['content'].map(len) < 20].index, inplace=True)
+        train, test = train_test_split(df, stratify=df['labels'], 
+                                        train_size=train_samples,
+                                        test_size=test_samples)
+        ordered_dataset['labels'].extend(list(train.labels))
+        ordered_dataset['content'].extend(list(train.content))
+        test_set['labels'].extend(list(test.labels))
+        test_set['content'].extend(list(test.content))
+
     ordered_dataframe = pd.DataFrame(ordered_dataset)
+
     # Shuffle the rows of the dataframe since the dataframe created has similar data grouped
-    if split == 'test':
-        ordered_dataframe.sample(frac=1).reset_index(drop=True, inplace=True)
+
 
     save_path = os.path.join(save_location, split, str(order)+'.csv')
-    # ordered_dataframe.to_csv(save_location+'/'+split +
-    #                          '/'+str(order)+'.csv', index=False)
     ordered_dataframe.to_csv(save_path, index=False)
+
+    
+    ordered_dataframe = pd.DataFrame(test_set)
+    # Shuffle the rows of the dataframe since the dataframe created has similar data groupe
+    ordered_dataframe.sample(frac=1).reset_index(drop=True, inplace=True)
+    save_path = os.path.join(save_location, 'test', str(order)+'.csv')
+    ordered_dataframe.to_csv(save_path, index=False)
+
+
     pkl_path = os.path.join(save_location, split, str(order)+'.pkl')
-    # with open(save_location+'/'+split+'/'+str(order)+'.pkl', 'wb') as f:
     with open(pkl_path, 'wb') as f:
         pickle.dump(label_to_class, f)
 
@@ -207,11 +239,11 @@ if __name__ == "__main__":
         end = time.time()
         print("Time taken for order {} : {} minutes".format(i+1, (end-start)/60))
         total_time += (end-start)/60
-    print("Total time taken: {} for generating training data".format(total_time))
-    # create test data
-    print("Started generating testing data")
-    start = time.time()
-    create_ordered_tc_data(i+1, split='test')
-    end = time.time()
-    print("Total time taken: {} for generating testing data".format((end-start)/60))
+    print("Total time taken: {} for generating training and test data".format(total_time))
+    # # create test data
+    # print("Started generating testing data")
+    # start = time.time()
+    # create_ordered_tc_data(i+1, split='test')
+    # end = time.time()
+    # print("Total time taken: {} for generating testing data".format((end-start)/60))
     print("Completed preprocessing :)")
