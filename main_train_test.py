@@ -28,7 +28,8 @@ REPLAY_FREQ = 201
 
 class MbPA_Experiment():
 
-    def __init__(self, batch_size=32, mode='train', order=1, epochs=1, model_path=None, memory_path = None, save_interval=4000):
+    def __init__(self, batch_size=32, mode='train', order=1, epochs=1, 
+                 model_path=None, memory_path = None, save_interval=4000):
 
         self.use_cuda = True if torch.cuda.is_available() else False
         self.batch_size = batch_size
@@ -40,14 +41,14 @@ class MbPA_Experiment():
         self.save_interval = save_interval
 
         if self.mode == 'train':
-            self.model = MbPAplusplus()
+            self.model = MbPAplusplus(num_labels=43)
             self.memory = ReplayMemory()
             self.train()
 
         if self.mode == 'test':
             model_state = torch.load(
                 self.model_path)
-            self.model = MbPAplusplus(model_state=model_state)
+            self.model = MbPAplusplus(model_state=model_state,num_labels=43)
             buffer = {}
             with open(self.memory_path, 'rb') as f:
                 buffer = pickle.load(f)
@@ -208,7 +209,8 @@ class MbPA_Experiment():
         """
         Function to calculate the accuracy of our predictions vs labels
         """
-        pred_flat = np.argmax(preds, axis=1).flatten()
+       
+        pred_flat = np.argmax(preds, axis=2).flatten()
         labels_flat = labels.flatten()
         return np.sum(pred_flat == labels_flat)
 
@@ -256,6 +258,7 @@ class MbPA_Experiment():
             # Dropping the 1 dim to match the logits' shape
             # shape : (batch_size,num_labels)
             labels = labels.squeeze(1).numpy()
+            # print(np.asarray(ans_logits), labels)
             tmp_correct = self.calc_correct(np.asarray(ans_logits), labels)
             # del labels
             total_correct += tmp_correct

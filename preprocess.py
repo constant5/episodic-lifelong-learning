@@ -1,243 +1,289 @@
-import pandas as pd
-import numpy as np
-import re
-import pickle
-import swifter
+import torch
+import torch.utils.data as data
+from data_loader import DataSet
+from models.MbPAplusplus import ReplayMemory, MbPAplusplus
+import transformers
+# from tqdm import trange, tqdm
+from tqdm.notebook import trange, tqdm
 import time
+import copy
+import matplotlib.pyplot as plt
+import numpy as np
+import pickle
 import os
-from sklearn.model_selection import train_test_split
 
-TC_NUM_CLASSES = {
-    'yelp': 5,
-    'yahoo': 10,
-    'amazon': 5,
-    'agnews': 4,
-    'dbpedia': 14,
-    'reddit' : 10
-}
-# dataset order for text classification
-TC_ORDER = {
-    1: ['yelp', 'agnews', 'dbpedia', 'amazon', 'yahoo', 'reddit'],
-    2: ['dbpedia', 'yahoo', 'reddit','agnews', 'amazon', 'yelp'],
-    3: ['yelp', 'reddit', 'yahoo', 'amazon', 'dbpedia', 'agnews'],
-    4: ['reddit','agnews', 'yelp', 'amazon', 'yahoo', 'dbpedia']
-}
-# dataset order for question answering
-# QA Not implemented
-# QA_ORDER = {
-#     1: ['quac', 'trweb', 'trwik', 'squad'],
-#     2: ['squad', 'trwik', 'quac', 'trweb'],
-#     3: ['trweb', 'trwik', 'squad', 'quac'],
-#     4: ['trwik', 'quac', 'trweb', 'squad']
-# }
-INDIVIDUAL_CLASS_LABELS = {
-    'yelp': {1: '1', 2: '2', 3: '3', 4: '4', 5: '5'},
-    'dbpedia': {1: 'Company', 2: 'EducationalInstitution', 3: 'Artist',
-                4: 'Athlete', 5: 'OfficeHolder', 6: 'MeanOfTransportation', 7: 'Building',
-                8: 'NaturalPlace', 9: 'Village', 10: 'Animal', 11: 'Plant', 12: 'Album',
-                13: 'Film', 14: 'WrittenWork'},
-    'yahoo': {1: 'Society & Culture', 2: 'Science & Mathematics', 3: 'Health',
-              4: 'Education & Reference', 5: 'Computers & Internet', 6: 'Sports',
-              7: 'Business & Finance', 8: 'Entertainment & Music',
-              9: 'Family & Relationships', 10: 'Politics & Government'},
-    'amazon': {1: '1', 2: '2', 3: '3', 4: '4', 5: '5'},
-    'agnews': {1: 'World', 2: 'Sports', 3: 'Business', 4: 'Sci/Tech'}, 
-    'reddit': {1: 'AskReddit', 2: 'pics', 3: 'gaming', 4: 'reddit.com', 5: 'funny',
-               6: 'IAmA', 7: 'fffffffuuuuuuuuuuuu', 8: 'politics', 9: 'atheism', 10: 'trees'}
-}
+# Use cudnn backends instead of vanilla backends when the input sizes
+# are similar so as to enable cudnn which will try to find optimal set
+# of algorithms to use for the hardware leading to faster runtime.
+torch.backends.cudnn.benchmark = True
+torch.backends.cudnn.enabled = True
 
+LEARNING_RATE = 3e-5
+MODEL_NAME = 'MbPA++'
+# Due to memory restraint, we sample only 64 examples from
+# stored memory after every 6400(1% replay rate) new examples seen
+# as opposed to 100 suggested in the paper. The sampling is done after
+# performing 200 steps(6400/32).
+REPLAY_FREQ = 201
 
-def preprocess(text):
-    """
-    Preprocesses the text
-    """
-    text = text.lower()
-    # removes '\n' present explicitly
-    text = re.sub(r"(\\n)+", " ", text)
-    # removes '\\'
-    text = re.sub(r"(\\\\)+", "", text)
-    # removes unnecessary space
-    text = re.sub(r"(\s){2,}", u" ", text)
-    # replaces repeated punctuation marks with single punctuation followed by a space
-    # e.g, what???? -> what?
-    text = re.sub(r"([.?!]){2,}", r"\1", text)
-    # appends space to $ which will help during tokenization
-    text = text.replace(u"$", u"$ ")
-    # replace decimal of the type x.y with x since decimal digits after '.' do not affect, e.g, 1.25 -> 1
-    text = re.sub(r"(\d+)\.(\d+)", r"\1", text)
-    # removes hyperlinks
-    text = re.sub(r"https?:\/\/\S+\b|www\.(\w+\.)+\S*", "", text)
-    # Truncating the content after 1280 characters
-    # 1280 = 128 (seq length) * 10((assumed avg. word size) 8 + (spaces on both sides) 2 = 10))
-    # Note: our model uses sequences of length 128
-    text = text[:1280]
-    return str(text)
+class MbPA_Experiment():
 
+    def __init__(self, batch_size=32, mode='train', order=1, epochs=1, 
+                 model_path=None, memory_path = None, save_interval=4000):
 
-def create_ordered_tc_data(order, base_location=os.path.join('data','original_data'), save_location=os.path.join
-('data','ordered_data'), split='train'):
-    """creates ordered dataset for text classification with a maximum of 115,000 sequences
-    and 7,600 sequences from each individual dataset for train and test data respectively
-    i.e.,the size of the smallest training and test sets
+        self.use_cuda = True if torch.cuda.is_available() else False
+        self.batch_size = batch_size
+        self.mode = mode
+        self.order = order
+        self.epochs = epochs
+        self.model_path = model_path
+        self.memory_path = memory_path
+        self.save_interval = save_interval
 
-    Args:
-        order (int): which order of data to generate from TC_ORDER      
-        base_location (str, optional): location of data to order. 
-            Defaults to os.path.join('data','original_data')
-        save_location (str, optional): location to save ordered data. 
-            Defaults to os.path.join('data','ordered_data').
-        TODO: This parmeter is not used 
-        split (str, optional): generate test or train set. Defaults to 'train'.
-    """
+        if self.mode == 'train':
+            self.model = MbPAplusplus(num_labels=43)
+            self.memory = ReplayMemory()
+            self.train()
 
-
-    if not os.path.exists(save_location):
-        os.mkdir(save_location)
-        os.mkdir(os.path.join(save_location, 'test'))
-        os.mkdir(os.path.join(save_location, 'train'))
-    dataset_sequence = TC_ORDER[order]
-    ordered_dataset = {'labels': [], 'content': []}
-    test_set = {'labels': [], 'content': []}
-    num_classes = -1
-    train_samples = 11500
-    test_samples = 7600
-    label_to_class = dict()
-    amazon_done = False
-    amazon_labels = dict()
-    yelp_done = False
-    yelp_labels = dict()
-
-    for data in dataset_sequence:
-
-        if data == 'yelp':
-            yelp_done = True
-            df = pd.read_csv(os.path.join(base_location, split, data +'.csv'), 
-                             header=None, names=['labels', 'content'])
-            df.dropna(subset=['content'], inplace=True)
-            df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            if amazon_done:
-                df.loc[:, 'labels'] = df.labels.swifter.apply(
-                    lambda x: amazon_labels[x])
-                for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                    new_key = amazon_labels[k]
-                    label_to_class[new_key] = v
-            else:
-                df.loc[:, 'labels'] = df.labels + num_classes
-                for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                    new_key = k + num_classes
-                    label_to_class[new_key] = v
-                    yelp_labels[k] = new_key
-                num_classes += TC_NUM_CLASSES[data]
-
-        elif data == 'amazon':
-            amazon_done = True
-            df = pd.read_csv(os.path.join(base_location, split, data +'.csv'),
-                             header=None, names=['labels', 'title', 'content'])
-            df.dropna(subset=['content'], inplace=True)
-            df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            if yelp_done:
-                df.loc[:, 'labels'] = df.labels.swifter.apply(
-                    lambda x: yelp_labels[x])
-                for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                    new_key = yelp_labels[k]
-                    label_to_class[new_key] = v
-            else:
-                df.loc[:, 'labels'] = df.labels + num_classes
-                for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                    new_key = k + num_classes
-                    label_to_class[new_key] = v
-                    amazon_labels[k] = new_key
-                num_classes += TC_NUM_CLASSES[data]
-
-
-        elif data == 'yahoo':
-            df = pd.read_csv(os.path.join(base_location, split, data +'.csv'),
-                             header=None, names=['labels', 'title', 'content', 'answer'])
-            df.dropna(subset=['content'], inplace=True)
-            print(df['labels'].head())
-            df.loc[:, 'labels'] = df.labels + num_classes
-            df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            # Mapping new labels to classes
-            for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                new_key = k + num_classes
-                label_to_class[new_key] = v
-            num_classes += TC_NUM_CLASSES[data]
+        if self.mode == 'test':
+            model_state = torch.load(
+                self.model_path)
+            self.model = MbPAplusplus(model_state=model_state,num_labels=43)
+            buffer = {}
+            with open(self.memory_path, 'rb') as f:
+                buffer = pickle.load(f)
+            self.memory = ReplayMemory(buffer=buffer)
+            self.test()
 
 
 
-        elif data=='reddit':
-            # dataset is agnews or dbpedia
-            df = pd.read_csv(base_location+'/'+split+'/'+data+'.csv',
-                             header=None, names=['labels','content'])
-            df.dropna(subset=['content'], inplace=True)
-            df.loc[:, 'labels'] = df.labels + num_classes
-            df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            # Mapping new labels to classes
-            for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                new_key = k + num_classes
-                label_to_class[new_key] = v
-            num_classes += TC_NUM_CLASSES[data]
-
-        
-        else:
-            # dataset is agnews or dbpedia
-            df = pd.read_csv(base_location+'/'+split+'/'+data+'.csv',
-                             header=None, names=['labels', 'title', 'content'])
-            df.dropna(subset=['content'], inplace=True)
-            df.loc[:, 'labels'] = df.labels + num_classes
-            df.loc[:, 'content'] = df.content.swifter.apply(preprocess)
-            # Mapping new labels to classes
-            for k, v in INDIVIDUAL_CLASS_LABELS[data].items():
-                new_key = k + num_classes
-                label_to_class[new_key] = v
-            num_classes += TC_NUM_CLASSES[data]
-
-
-
-        # filter rows with length greater than 20 (2 words including spaces on average)
-        df.drop(df[df['content'].map(len) < 20].index, inplace=True)
-        train, test = train_test_split(df, stratify=df['labels'], 
-                                        train_size=train_samples,
-                                        test_size=test_samples)
-        ordered_dataset['labels'].extend(list(train.labels))
-        ordered_dataset['content'].extend(list(train.content))
-        test_set['labels'].extend(list(test.labels))
-        test_set['content'].extend(list(test.content))
-
-    ordered_dataframe = pd.DataFrame(ordered_dataset)
-
-    # Shuffle the rows of the dataframe since the dataframe created has similar data grouped
-
-
-    save_path = os.path.join(save_location, split, str(order)+'.csv')
-    ordered_dataframe.to_csv(save_path, index=False)
-
-    
-    ordered_dataframe = pd.DataFrame(test_set)
-    # Shuffle the rows of the dataframe since the dataframe created has similar data groupe
-    ordered_dataframe.sample(frac=1).reset_index(drop=True, inplace=True)
-    save_path = os.path.join(save_location, 'test', str(order)+'.csv')
-    ordered_dataframe.to_csv(save_path, index=False)
-
-
-    pkl_path = os.path.join(save_location, split, str(order)+'.pkl')
-    with open(pkl_path, 'wb') as f:
-        pickle.dump(label_to_class, f)
-
-
-if __name__ == "__main__":
-
-
-    # create ordered dataset
-    total_time = 0
-    total_order = 4
-    print("Started generating training data")
-    for i in range(0,total_order):
-        print("Started for order {}".format(i+1))
+    def train(self):
+        """
+        Train function
+        """
+        workers = 0
+        if self.use_cuda:
+            self.model.cuda()
+            # Number of workers should be 4*num_gpu_available
+            # https://discuss.pytorch.org/t/guidelines-for-assigning-num-workers-to-dataloader/813/5
+            workers = 4
+        # time at the start of training
         start = time.time()
-        create_ordered_tc_data(i+1, split='train')
+
+        train_data = DataSet(self.order, split='train')
+        train_sampler = data.SequentialSampler(train_data)
+        train_dataloader = data.DataLoader(
+            train_data, sampler=train_sampler, batch_size=self.batch_size, num_workers=workers)
+        param_optimizer = list(self.model.classifier.named_parameters())
+        # parameters that need not be decayed
+        no_decay = ['bias', 'gamma', 'beta']
+        # Grouping the parameters based on whether each parameter undergoes decay or not.
+        optimizer_grouped_parameters = [
+            {'params': [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)],
+            'weight_decay_rate': 0.01},
+            {'params': [p for n, p in param_optimizer if any(nd in n for nd in no_decay)],
+            'weight_decay_rate': 0.0}]
+        optimizer = transformers.AdamW(
+            optimizer_grouped_parameters, lr=LEARNING_RATE)
+
+        # Store our loss and accuracy for plotting
+        train_loss_set = []
+        # trange is a tqdm wrapper around the normal python range
+        # for epoch in tnrange(self.epochs, desc="Epoch"):
+        for epoch in trange(self.epochs, desc='Epochs'):
+        # for epoch in range(self.epochs):
+            # Training begins
+            print("Training begins")
+            # Set our model to training mode (as opposed to evaluation mode)
+            self.model.classifier.train()
+            # Tracking variables
+            tr_loss = 0
+            nb_tr_examples, nb_tr_steps, num_curr_exs = 0, 0, 0
+            # Train the data for one epoch
+            for step, batch in enumerate(tqdm(train_dataloader, desc='Batch')):
+            # for step, batch in enumerate(train_dataloader):
+                # Release file descriptors which function as shared
+                # memory handles otherwise it will hit the limit when
+                # there are too many batches at dataloader
+                batch_cp = copy.deepcopy(batch)
+                del batch
+                # Perform sparse experience replay after every REPLAY_FREQ steps
+                if (step+1) % REPLAY_FREQ == 0:
+                    # sample 64 examples from memory
+                    content, attn_masks, labels = self.memory.sample(sample_size=self.batch_size)
+                    if self.use_cuda:
+                        content = content.cuda()
+                        attn_masks = attn_masks.cuda()
+                        labels = labels.cuda()
+                    # Clear out the gradients (by default they accumulate)
+                    optimizer.zero_grad()
+                    # Forward pass
+                    loss, _ = self.model.classify(content, attn_masks, labels)
+                    train_loss_set.append(loss.item())
+                    # Backward pass
+                    loss.backward()
+                    # Update parameters and take a step using the computed gradient
+                    optimizer.step()
+
+                    # Update tracking variables
+                    tr_loss += loss.item()
+                    nb_tr_examples += content.size(0)
+                    nb_tr_steps += 1
+
+                    del content
+                    del attn_masks
+                    del labels
+                    del loss
+
+                if (step+1) % self.save_interval == 0:
+                    print('Saving checkpoint at step ' , str(step+1))
+                    model_dict = self.model.save_state()
+                    self.save_checkpoint(model_dict, epoch+1, iteration=str(step+1))
+
+                # Unpacking the batch items
+                content, attn_masks, labels = batch_cp
+                content = content.squeeze(1)
+                attn_masks = attn_masks.squeeze(1)
+                labels = labels.squeeze(1)
+                # number of examples in the current batch
+                num_curr_exs = content.size(0)
+                # Place the batch items on the appropriate device: cuda if avaliable
+                if self.use_cuda:
+                    content = content.cuda()
+                    attn_masks = attn_masks.cuda()
+                    labels = labels.cuda()
+                # Clear out the gradients (by default they accumulate)
+                optimizer.zero_grad()
+                # Forward pass
+                loss, _ = self.model.classify(content, attn_masks, labels)
+                train_loss_set.append(loss.item())
+                # Get the key representation of documents
+                keys = self.model.get_keys(content, attn_masks)
+                # Push the examples into the replay memory
+                self.memory.push(keys.cpu().numpy(), (content.cpu().numpy(),
+                                                attn_masks.cpu().numpy(), labels.cpu().numpy()))
+                # delete the batch data to freeup gpu memory
+                del keys
+                del content
+                del attn_masks
+                del labels
+                # Backward pass
+                loss.backward()
+                # Update parameters and take a step using the computed gradient
+                optimizer.step()
+                # Update tracking variables
+                tr_loss += loss.item()
+                nb_tr_examples += num_curr_exs
+                nb_tr_steps += 1
+
+            now = time.time()
+            print("Train loss: {}".format(tr_loss/nb_tr_steps))
+            print("Time taken till now: {} hours".format((now-start)/3600))
+            model_dict = self.model.save_state()
+            self.save_checkpoint(model_dict, epoch+1, memory=True)
+
+        self.save_trainloss(train_loss_set)
+
+
+    def save_checkpoint(self, model_dict, epoch, iteration='', memory=None):
+        """
+        Function to save a model checkpoint to the specified location
+        """
+        base_loc = 'model_checkpoints'
+        if not os.path.exists(base_loc):
+            os.mkdir('model_checkpoints')
+
+        checkpoints_dir = os.path.join(base_loc, MODEL_NAME)
+        if not os.path.exists(checkpoints_dir):
+            os.mkdir(checkpoints_dir)
+        checkpoints_file = 'classifier_order_' + \
+            str(self.order) + '_epoch_'+str(epoch)+'_'+iteration+'.pth'
+        torch.save(model_dict, os.path.join(checkpoints_dir, checkpoints_file))
+        memory_file = 'order_'+str(self.order)+'_epoch_'+str(epoch)+'_'+iteration+'.pkl'
+        if memory:
+            with open(os.path.join(checkpoints_dir,memory_file), 'wb') as f:
+                pickle.dump(self.memory.memory, f)
+
+
+    def calc_correct(self, preds, labels):
+        """
+        Function to calculate the accuracy of our predictions vs labels
+        """
+       
+        # pred_flat = np.argmax(preds, axis=1).flatten()
+        pred_flat = np.argmax(preds, axis=2).flatten()
+        labels_flat = labels.flatten()
+        return np.sum(pred_flat == labels_flat)
+
+
+    def test(self):
+        """
+        evaluate the model for accuracy
+        """
+        # time at the start of validation
+        start = time.time()
+        if self.use_cuda:
+            self.model.cuda()
+
+        test_data = DataSet(self.order, split='test')
+        test_dataloader = data.DataLoader(
+            test_data, shuffle=True, batch_size=64, num_workers=4)
+
+        # Tracking variables
+        total_correct, tmp_correct, t_steps = 0, 0, 0
+
+        print("Validation step started...")
+        for batch in tqdm(test_dataloader, desc='Batch'):
+            batch_cp = copy.deepcopy(batch)
+            del batch
+            contents, attn_masks, labels = batch_cp
+            if self.use_cuda:
+                contents = contents.squeeze(1).cuda()
+                attn_masks = attn_masks.squeeze(1).cuda()
+            keys = self.model.get_keys(contents, attn_masks)
+            retrieved_batches = self.memory.get_neighbours(keys.cpu().numpy())
+            del keys
+            ans_logits = []
+            # Iterate over the test batch to calculate label for each document(i.e,content)
+            # and store them in a list for comparision later
+            for content, attn_mask, (rt_contents, rt_attn_masks, rt_labels) in tqdm(zip(contents, attn_masks, retrieved_batches), total=len(contents), desc='Refit' , leave=False):
+                if self.use_cuda:
+                    rt_contents = rt_contents.cuda()
+                    rt_attn_masks = rt_attn_masks.cuda()
+                    rt_labels = rt_labels.cuda()
+
+                logits = self.model.infer(content, attn_mask,
+                                    rt_contents, rt_attn_masks, rt_labels)
+
+                ans_logits.append(logits.cpu().numpy())
+            # Dropping the 1 dim to match the logits' shape
+            # shape : (batch_size,num_labels)
+            labels = labels.squeeze(1).numpy()
+            # print(np.asarray(ans_logits), labels)
+            tmp_correct = self.calc_correct(np.asarray(ans_logits), labels)
+            # del labels
+            total_correct += tmp_correct
+            t_steps += len(labels.flatten())
         end = time.time()
-        print("Time taken for order {} : {} minutes".format(i+1, (end-start)/60))
-        total_time += (end-start)/60
-    print("Total time taken: {} for generating training and test data".format(total_time))
-    print("Completed preprocessing :)")
+        print("Time taken for validation {} minutes".format((end-start)/60))
+        print("Validation Accuracy: {}".format(total_correct/t_steps))
+
+
+    def save_trainloss(self, train_loss_set):
+        """
+        Function to save the image of training loss v/s iterations graph
+        """
+        plt.figure(figsize=(15, 8))
+        plt.title("Training loss")
+        plt.xlabel("Batch")
+        plt.ylabel("Loss")
+        plt.plot(train_loss_set)
+        base_loc = './loss_images'
+        if not os.path.exists(base_loc):
+            os.mkdir(base_loc)
+
+        image_dir = os.path.join(base_loc,MODEL_NAME)
+        if not os.path.exists(image_dir):
+            os.mkdir(image_dir)
+
+        plt.savefig(os.path.join(image_dir, 'order_'+str(self.order)+'_train_loss.png'))

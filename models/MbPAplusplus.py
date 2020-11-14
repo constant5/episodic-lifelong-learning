@@ -92,8 +92,9 @@ class MbPAplusplus(nn.Module):
     Implements Memory based Parameter Adaptation model
     """
 
-    def __init__(self, L=2, model_state=None):
+    def __init__(self, L=2, model_state=None, num_labels=33):
         # super(MbPAplusplus, self).__init__()
+        super().__init__()
 
         if model_state is None:
             # Key network to find key representation of content
@@ -101,12 +102,12 @@ class MbPAplusplus(nn.Module):
                 'bert-base-uncased')
             # Bert model for text classification
             self.classifier = transformers.BertForSequenceClassification.from_pretrained(
-                'bert-base-uncased', num_labels=33)
+                'bert-base-uncased', num_labels=num_labels)
 
         else:
 
             cls_config = transformers.BertConfig.from_pretrained(
-                'bert-base-uncased', num_labels=33)
+                'bert-base-uncased', num_labels=num_labels)
             self.classifier = transformers.BertForSequenceClassification(
                 cls_config)
             self.classifier.load_state_dict(model_state['classifier'])
